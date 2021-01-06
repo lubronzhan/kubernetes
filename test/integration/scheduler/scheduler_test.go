@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	restclient "k8s.io/client-go/rest"
@@ -40,6 +39,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler"
 	kubeschedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/profile"
+	st "k8s.io/kubernetes/pkg/scheduler/testing"
 	"k8s.io/kubernetes/test/integration/framework"
 	testutils "k8s.io/kubernetes/test/integration/util"
 )
@@ -63,7 +63,7 @@ func TestSchedulerCreationFromConfigMap(t *testing.T) {
 
 	clientSet := clientset.NewForConfigOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
 	defer clientSet.CoreV1().Nodes().DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{})
-	informerFactory := informers.NewSharedInformerFactory(clientSet, 0)
+	informerFactory := scheduler.NewInformerFactory(clientSet, 0)
 
 	for i, test := range []struct {
 		policy          string
@@ -90,6 +90,7 @@ func TestSchedulerCreationFromConfigMap(t *testing.T) {
 					{Name: "NodeResourcesFit"},
 					{Name: "TaintToleration"},
 				},
+				"PostFilterPlugin": {{Name: "DefaultPreemption"}},
 				"ScorePlugin": {
 					{Name: "ImageLocality", Weight: 1},
 				},
@@ -127,10 +128,11 @@ func TestSchedulerCreationFromConfigMap(t *testing.T) {
 					{Name: "PodTopologySpread"},
 					{Name: "InterPodAffinity"},
 				},
+				"PostFilterPlugin": {{Name: "DefaultPreemption"}},
 				"PreScorePlugin": {
 					{Name: "PodTopologySpread"},
 					{Name: "InterPodAffinity"},
-					{Name: "DefaultPodTopologySpread"},
+					{Name: "NodeAffinity"},
 					{Name: "TaintToleration"},
 				},
 				"ScorePlugin": {
@@ -141,14 +143,11 @@ func TestSchedulerCreationFromConfigMap(t *testing.T) {
 					{Name: "NodeResourcesLeastAllocated", Weight: 1},
 					{Name: "NodeAffinity", Weight: 1},
 					{Name: "NodePreferAvoidPods", Weight: 10000},
-					{Name: "DefaultPodTopologySpread", Weight: 1},
 					{Name: "TaintToleration", Weight: 1},
 				},
-				"ReservePlugin":   {{Name: "VolumeBinding"}},
-				"UnreservePlugin": {{Name: "VolumeBinding"}},
-				"PreBindPlugin":   {{Name: "VolumeBinding"}},
-				"BindPlugin":      {{Name: "DefaultBinder"}},
-				"PostBindPlugin":  {{Name: "VolumeBinding"}},
+				"ReservePlugin": {{Name: "VolumeBinding"}},
+				"PreBindPlugin": {{Name: "VolumeBinding"}},
+				"BindPlugin":    {{Name: "DefaultBinder"}},
 			},
 		},
 		{
@@ -164,7 +163,8 @@ func TestSchedulerCreationFromConfigMap(t *testing.T) {
 					{Name: "NodeUnschedulable"},
 					{Name: "TaintToleration"},
 				},
-				"BindPlugin": {{Name: "DefaultBinder"}},
+				"PostFilterPlugin": {{Name: "DefaultPreemption"}},
+				"BindPlugin":       {{Name: "DefaultBinder"}},
 			},
 		},
 		{
@@ -186,6 +186,7 @@ priorities:
 					{Name: "NodeResourcesFit"},
 					{Name: "TaintToleration"},
 				},
+				"PostFilterPlugin": {{Name: "DefaultPreemption"}},
 				"ScorePlugin": {
 					{Name: "ImageLocality", Weight: 1},
 				},
@@ -222,10 +223,11 @@ kind: Policy
 					{Name: "PodTopologySpread"},
 					{Name: "InterPodAffinity"},
 				},
+				"PostFilterPlugin": {{Name: "DefaultPreemption"}},
 				"PreScorePlugin": {
 					{Name: "PodTopologySpread"},
 					{Name: "InterPodAffinity"},
-					{Name: "DefaultPodTopologySpread"},
+					{Name: "NodeAffinity"},
 					{Name: "TaintToleration"},
 				},
 				"ScorePlugin": {
@@ -236,14 +238,11 @@ kind: Policy
 					{Name: "NodeResourcesLeastAllocated", Weight: 1},
 					{Name: "NodeAffinity", Weight: 1},
 					{Name: "NodePreferAvoidPods", Weight: 10000},
-					{Name: "DefaultPodTopologySpread", Weight: 1},
 					{Name: "TaintToleration", Weight: 1},
 				},
-				"ReservePlugin":   {{Name: "VolumeBinding"}},
-				"UnreservePlugin": {{Name: "VolumeBinding"}},
-				"PreBindPlugin":   {{Name: "VolumeBinding"}},
-				"BindPlugin":      {{Name: "DefaultBinder"}},
-				"PostBindPlugin":  {{Name: "VolumeBinding"}},
+				"ReservePlugin": {{Name: "VolumeBinding"}},
+				"PreBindPlugin": {{Name: "VolumeBinding"}},
+				"BindPlugin":    {{Name: "DefaultBinder"}},
 			},
 		},
 		{
@@ -258,7 +257,8 @@ priorities: []
 					{Name: "NodeUnschedulable"},
 					{Name: "TaintToleration"},
 				},
-				"BindPlugin": {{Name: "DefaultBinder"}},
+				"PostFilterPlugin": {{Name: "DefaultPreemption"}},
+				"BindPlugin":       {{Name: "DefaultBinder"}},
 			},
 		},
 	} {
@@ -272,13 +272,12 @@ priorities: []
 		policyConfigMap.APIVersion = "v1"
 		clientSet.CoreV1().ConfigMaps(metav1.NamespaceSystem).Create(context.TODO(), &policyConfigMap, metav1.CreateOptions{})
 
-		eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: clientSet.EventsV1beta1().Events("")})
+		eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: clientSet.EventsV1()})
 		stopCh := make(chan struct{})
 		eventBroadcaster.StartRecordingToSink(stopCh)
 
 		sched, err := scheduler.New(clientSet,
 			informerFactory,
-			scheduler.NewPodInformer(clientSet, 0),
 			profile.NewRecorderFactory(eventBroadcaster),
 			nil,
 			scheduler.WithAlgorithmSource(kubeschedulerconfig.SchedulerAlgorithmSource{
@@ -324,15 +323,14 @@ func TestSchedulerCreationFromNonExistentConfigMap(t *testing.T) {
 	clientSet := clientset.NewForConfigOrDie(&restclient.Config{Host: s.URL, ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Group: "", Version: "v1"}}})
 	defer clientSet.CoreV1().Nodes().DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{})
 
-	informerFactory := informers.NewSharedInformerFactory(clientSet, 0)
+	informerFactory := scheduler.NewInformerFactory(clientSet, 0)
 
-	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: clientSet.EventsV1beta1().Events("")})
+	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{Interface: clientSet.EventsV1()})
 	stopCh := make(chan struct{})
 	eventBroadcaster.StartRecordingToSink(stopCh)
 
 	_, err := scheduler.New(clientSet,
 		informerFactory,
-		scheduler.NewPodInformer(clientSet, 0),
 		profile.NewRecorderFactory(eventBroadcaster),
 		nil,
 		scheduler.WithAlgorithmSource(kubeschedulerconfig.SchedulerAlgorithmSource{
@@ -437,7 +435,7 @@ func TestUnschedulableNodes(t *testing.T) {
 	}
 
 	for i, mod := range nodeModifications {
-		unSchedNode, err := testCtx.ClientSet.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+		unSchedNode, err := createNode(testCtx.ClientSet, node)
 		if err != nil {
 			t.Fatalf("Failed to create node: %v", err)
 		}
@@ -520,7 +518,7 @@ func TestMultipleSchedulers(t *testing.T) {
 			},
 		},
 	}
-	testCtx.ClientSet.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+	createNode(testCtx.ClientSet, node)
 
 	// 3. create 3 pods for testing
 	t.Logf("create 3 pods for testing")
@@ -565,7 +563,7 @@ func TestMultipleSchedulers(t *testing.T) {
 
 	// 5. create and start a scheduler with name "foo-scheduler"
 	fooProf := kubeschedulerconfig.KubeSchedulerProfile{SchedulerName: fooScheduler}
-	testCtx = testutils.InitTestSchedulerWithOptions(t, testCtx, true, nil, time.Second, scheduler.WithProfiles(fooProf))
+	testCtx = testutils.InitTestSchedulerWithOptions(t, testCtx, nil, scheduler.WithProfiles(fooProf))
 	testutils.SyncInformerFactory(testCtx)
 	go testCtx.Scheduler.Run(testCtx.Ctx)
 
@@ -645,7 +643,7 @@ func TestMultipleSchedulingProfiles(t *testing.T) {
 			},
 		},
 	}
-	if _, err := testCtx.ClientSet.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{}); err != nil {
+	if _, err := createNode(testCtx.ClientSet, node); err != nil {
 		t.Fatal(err)
 	}
 
@@ -701,12 +699,12 @@ func TestAllocatable(t *testing.T) {
 	defer testutils.CleanupTest(t, testCtx)
 
 	// 2. create a node without allocatable awareness
-	nodeRes := &v1.ResourceList{
-		v1.ResourcePods:   *resource.NewQuantity(32, resource.DecimalSI),
-		v1.ResourceCPU:    *resource.NewMilliQuantity(30, resource.DecimalSI),
-		v1.ResourceMemory: *resource.NewQuantity(30, resource.BinarySI),
+	nodeRes := map[v1.ResourceName]string{
+		v1.ResourcePods:   "32",
+		v1.ResourceCPU:    "30m",
+		v1.ResourceMemory: "30",
 	}
-	allocNode, err := createNode(testCtx.ClientSet, "node-allocatable-scheduler-test-node", nodeRes)
+	allocNode, err := createNode(testCtx.ClientSet, st.MakeNode().Name("node-allocatable-scheduler-test-node").Capacity(nodeRes).Obj())
 	if err != nil {
 		t.Fatalf("Failed to create node: %v", err)
 	}
@@ -779,15 +777,15 @@ func TestSchedulerInformers(t *testing.T) {
 		v1.ResourceCPU:    *resource.NewMilliQuantity(200, resource.DecimalSI),
 		v1.ResourceMemory: *resource.NewQuantity(200, resource.BinarySI)},
 	}
-	defaultNodeRes := &v1.ResourceList{
-		v1.ResourcePods:   *resource.NewQuantity(32, resource.DecimalSI),
-		v1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI),
-		v1.ResourceMemory: *resource.NewQuantity(500, resource.BinarySI),
+	defaultNodeRes := map[v1.ResourceName]string{
+		v1.ResourcePods:   "32",
+		v1.ResourceCPU:    "500m",
+		v1.ResourceMemory: "500",
 	}
 
 	type nodeConfig struct {
 		name string
-		res  *v1.ResourceList
+		res  map[v1.ResourceName]string
 	}
 
 	tests := []struct {
@@ -830,10 +828,14 @@ func TestSchedulerInformers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for _, nodeConf := range test.nodes {
-				_, err := createNode(cs, nodeConf.name, nodeConf.res)
+				_, err := createNode(cs, st.MakeNode().Name(nodeConf.name).Capacity(nodeConf.res).Obj())
 				if err != nil {
 					t.Fatalf("Error creating node %v: %v", nodeConf.name, err)
 				}
+			}
+			// Ensure nodes are present in scheduler cache.
+			if err := waitForNodesInCache(testCtx.Scheduler, len(test.nodes)); err != nil {
+				t.Fatal(err)
 			}
 
 			pods := make([]*v1.Pod, len(test.existingPods))

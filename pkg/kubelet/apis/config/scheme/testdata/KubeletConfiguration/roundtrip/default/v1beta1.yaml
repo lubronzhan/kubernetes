@@ -25,6 +25,7 @@ cpuManagerReconcilePeriod: 10s
 enableControllerAttachDetach: true
 enableDebuggingHandlers: true
 enableServer: true
+enableSystemLogHandler: true
 enforceNodeAllocatable:
 - pods
 eventBurst: 10
@@ -49,6 +50,8 @@ iptablesMasqueradeBit: 14
 kind: KubeletConfiguration
 kubeAPIBurst: 10
 kubeAPIQPS: 5
+logging:
+  format: text
 makeIPTablesUtilChains: true
 maxOpenFiles: 1000000
 maxPods: 110
@@ -64,8 +67,11 @@ registryPullQPS: 5
 resolvConf: /etc/resolv.conf
 runtimeRequestTimeout: 2m0s
 serializeImagePulls: true
+shutdownGracePeriod: 0s
+shutdownGracePeriodCriticalPods: 0s
 streamingConnectionIdleTimeout: 4h0m0s
 syncFrequency: 1m0s
 topologyManagerPolicy: none
+topologyManagerScope: container
 volumePluginDir: /usr/libexec/kubernetes/kubelet-plugins/volume/exec/
 volumeStatsAggPeriod: 1m0s

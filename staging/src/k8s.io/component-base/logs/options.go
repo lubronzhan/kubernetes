@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 
+	"k8s.io/component-base/logs/sanitization"
 	"k8s.io/klog/v2"
 )
 
@@ -34,13 +35,14 @@ const (
 
 // List of logs (k8s.io/klog + k8s.io/component-base/logs) flags supported by all logging formats
 var supportedLogsFlags = map[string]struct{}{
-	"v":       {},
-	"vmodule": {},
+	"v": {},
+	// TODO: support vmodule after 1.19 Alpha
 }
 
 // Options has klog format parameters
 type Options struct {
-	LogFormat string
+	LogFormat       string
+	LogSanitization bool
 }
 
 // NewOptions return new klog options
@@ -50,12 +52,34 @@ func NewOptions() *Options {
 	}
 }
 
-// Validate check LogFormat in registry or not
+// Validate verifies if any unsupported flag is set
+// for non-default logging format
 func (o *Options) Validate() []error {
-	if _, err := o.Get(); err != nil {
-		return []error{fmt.Errorf("unsupported log format: %s", o.LogFormat)}
+	errs := []error{}
+	if o.LogFormat != defaultLogFormat {
+		allFlags := unsupportedLoggingFlags()
+		for _, fname := range allFlags {
+			if flagIsSet(fname) {
+				errs = append(errs, fmt.Errorf("non-default logging format doesn't honor flag: %s", fname))
+			}
+		}
 	}
-	return nil
+	if _, err := o.Get(); err != nil {
+		errs = append(errs, fmt.Errorf("unsupported log format: %s", o.LogFormat))
+	}
+	return errs
+}
+
+func flagIsSet(name string) bool {
+	f := flag.Lookup(name)
+	if f != nil {
+		return f.DefValue != f.Value.String()
+	}
+	pf := pflag.Lookup(name)
+	if pf != nil {
+		return pf.DefValue != pf.Value.String()
+	}
+	panic("failed to lookup unsupported log flag")
 }
 
 // AddFlags add logging-format flag
@@ -63,14 +87,21 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	unsupportedFlags := fmt.Sprintf("--%s", strings.Join(unsupportedLoggingFlags(), ", --"))
 	formats := fmt.Sprintf(`"%s"`, strings.Join(logRegistry.List(), `", "`))
 	fs.StringVar(&o.LogFormat, logFormatFlagName, defaultLogFormat, fmt.Sprintf("Sets the log format. Permitted formats: %s.\nNon-default formats don't honor these flags: %s.\nNon-default choices are currently alpha and subject to change without warning.", formats, unsupportedFlags))
+
+	// No new log formats should be added after generation is of flag options
+	logRegistry.Freeze()
+	fs.BoolVar(&o.LogSanitization, "experimental-logging-sanitization", o.LogSanitization, `[Experimental] When enabled prevents logging of fields tagged as sensitive (passwords, keys, tokens).
+Runtime log sanitization may introduce significant computation overhead and therefore should not be enabled in production.`)
 }
 
 // Apply set klog logger from LogFormat type
 func (o *Options) Apply() {
 	// if log format not exists, use nil loggr
 	loggr, _ := o.Get()
-
 	klog.SetLogger(loggr)
+	if o.LogSanitization {
+		klog.SetLogFilter(&sanitization.SanitizingFilter{})
+	}
 }
 
 // Get logger with LogFormat field

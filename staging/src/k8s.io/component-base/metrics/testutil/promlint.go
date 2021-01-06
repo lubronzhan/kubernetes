@@ -33,11 +33,6 @@ var exceptionMetrics = []string{
 	// k8s.io/kubernetes/vendor/k8s.io/apiserver/pkg/server/egressselector
 	"apiserver_egress_dialer_dial_failure_count", // counter metrics should have "_total" suffix
 
-	// k8s.io/apiserver/pkg/util/flowcontrol/fairqueuing/queueset
-	"apiserver_flowcontrol_current_inqueue_requests",   // label names should be written in 'snake_case' not 'camelCase',
-	"apiserver_flowcontrol_current_executing_requests", // label names should be written in 'snake_case' not 'camelCase'
-	"apiserver_flowcontrol_rejected_requests_total",    // label names should be written in 'snake_case' not 'camelCase'
-
 	// k8s.io/kubernetes/vendor/k8s.io/apiserver/pkg/server/healthz
 	"apiserver_request_total", // label names should be written in 'snake_case' not 'camelCase'
 
@@ -64,12 +59,9 @@ var exceptionMetrics = []string{
 	"node_collector_evictions_number",
 
 	// k8s.io/kubernetes/pkg/kubelet/server/stats
+	// The two metrics have been deprecated and will be removed in release v1.20+.
 	"container_cpu_usage_seconds_total", // non-counter metrics should not have "_total" suffix
 	"node_cpu_usage_seconds_total",      // non-counter metrics should not have "_total" suffix
-
-	// k8s.io/kubernetes/pkg/kubelet/pleg
-	"kubelet_running_container_count", // non-histogram and non-summary metrics should not have "_count" suffix
-	"kubelet_running_pod_count",       // non-histogram and non-summary metrics should not have "_count" suffix
 }
 
 // A Problem is an issue detected by a Linter.

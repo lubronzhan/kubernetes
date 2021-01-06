@@ -87,6 +87,9 @@ function start-kube-apiserver {
     if [[ -n "${OLD_LOAD_BALANCER_IP:-}" ]]; then
       old_ips+=",${OLD_LOAD_BALANCER_IP}"
     fi
+    if [[ -n "${OLD_PRIVATE_VIP:-}" ]]; then
+      old_ips+=",${OLD_PRIVATE_VIP}"
+    fi
     params+=" --tls-sni-cert-key=${OLD_MASTER_CERT_PATH},${OLD_MASTER_KEY_PATH}:${old_ips}"
   fi
   params+=" --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname"
@@ -261,9 +264,6 @@ function start-kube-apiserver {
   if [[ -n "${FEATURE_GATES:-}" ]]; then
     params+=" --feature-gates=${FEATURE_GATES}"
   fi
-  if [[ "${FEATURE_GATES:-}" =~ "RuntimeClass=true" ]]; then
-    params+=" --runtime-config=node.k8s.io/v1alpha1=true"
-  fi
   if [[ -n "${MASTER_ADVERTISE_ADDRESS:-}" ]]; then
     params+=" --advertise-address=${MASTER_ADVERTISE_ADDRESS}"
     if [[ -n "${PROXY_SSH_USER:-}" ]]; then
@@ -332,16 +332,18 @@ function start-kube-apiserver {
   local csc_config_volume=""
   local default_konnectivity_socket_vol=""
   local default_konnectivity_socket_mnt=""
-  if [[ "${ENABLE_EGRESS_VIA_KONNECTIVITY_SERVICE:-false}" == "true" ]]; then
+  if [[ "${PREPARE_KONNECTIVITY_SERVICE:-false}" == "true" ]]; then
     # Create the EgressSelectorConfiguration yaml file to control the Egress Selector.
     csc_config_mount="{\"name\": \"cscconfigmount\",\"mountPath\": \"/etc/srv/kubernetes/egress_selector_configuration.yaml\", \"readOnly\": false},"
     csc_config_volume="{\"name\": \"cscconfigmount\",\"hostPath\": {\"path\": \"/etc/srv/kubernetes/egress_selector_configuration.yaml\", \"type\": \"FileOrCreate\"}},"
-    params+=" --egress-selector-config-file=/etc/srv/kubernetes/egress_selector_configuration.yaml"
 
     # UDS socket for communication between apiserver and konnectivity-server
-    local default_konnectivity_socket_path="/etc/srv/kubernetes/konnectivity"
+    local default_konnectivity_socket_path="/etc/srv/kubernetes/konnectivity-server"
     default_konnectivity_socket_vol="{ \"name\": \"konnectivity-socket\", \"hostPath\": {\"path\": \"${default_konnectivity_socket_path}\", \"type\": \"DirectoryOrCreate\"}},"
     default_konnectivity_socket_mnt="{ \"name\": \"konnectivity-socket\", \"mountPath\": \"${default_konnectivity_socket_path}\", \"readOnly\": false},"
+  fi
+  if [[ "${EGRESS_VIA_KONNECTIVITY:-false}" == "true" ]]; then
+    params+=" --egress-selector-config-file=/etc/srv/kubernetes/egress_selector_configuration.yaml"
   fi
 
   local container_env=""
@@ -362,6 +364,11 @@ function start-kube-apiserver {
 
   # params is passed by reference, so no "$"
   setup-etcd-encryption "${src_file}" params
+
+  local healthcheck_ip="127.0.0.1"
+  if [[ ${KUBE_APISERVER_HEALTHCHECK_ON_HOST_IP:-} == "true" ]]; then
+    healthcheck_ip=$(hostname -i)
+  fi
 
   params="$(convert-manifest-params "${params}")"
   # Evaluate variables.
@@ -393,6 +400,7 @@ function start-kube-apiserver {
   sed -i -e "s@{{webhook_exec_auth_plugin_volume}}@${webhook_exec_auth_plugin_volume}@g" "${src_file}"
   sed -i -e "s@{{konnectivity_socket_mount}}@${default_konnectivity_socket_mnt}@g" "${src_file}"
   sed -i -e "s@{{konnectivity_socket_volume}}@${default_konnectivity_socket_vol}@g" "${src_file}"
+  sed -i -e "s@{{healthcheck_ip}}@${healthcheck_ip}@g" "${src_file}"
 
   cp "${src_file}" "${ETC_MANIFESTS:-/etc/kubernetes/manifests}"
 }

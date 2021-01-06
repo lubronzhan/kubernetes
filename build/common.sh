@@ -43,7 +43,7 @@ readonly KUBE_BUILD_IMAGE_REPO=kube-build
 readonly KUBE_BUILD_IMAGE_CROSS_TAG="$(cat "${KUBE_ROOT}/build/build-image/cross/VERSION")"
 
 readonly KUBE_DOCKER_REGISTRY="${KUBE_DOCKER_REGISTRY:-k8s.gcr.io}"
-readonly KUBE_BASE_IMAGE_REGISTRY="${KUBE_BASE_IMAGE_REGISTRY:-us.gcr.io/k8s-artifacts-prod/build-image}"
+readonly KUBE_BASE_IMAGE_REGISTRY="${KUBE_BASE_IMAGE_REGISTRY:-k8s.gcr.io/build-image}"
 
 # This version number is used to cause everyone to rebuild their data containers
 # and build image.  This is especially useful for automated build systems like
@@ -93,17 +93,15 @@ readonly KUBE_CONTAINER_RSYNC_PORT=8730
 #
 # $1 - server architecture
 kube::build::get_docker_wrapped_binaries() {
-  local arch=$1
-  local debian_base_version=v2.1.0
-  local debian_iptables_version=v12.1.0
-  local go_runner_version=v0.1.1
+  local debian_iptables_version=buster-v1.3.0
+  local go_runner_version=buster-v2.2.2
   ### If you change any of these lists, please also update DOCKERIZED_BINARIES
   ### in build/BUILD. And kube::golang::server_image_targets
   local targets=(
     "kube-apiserver,${KUBE_BASE_IMAGE_REGISTRY}/go-runner:${go_runner_version}"
     "kube-controller-manager,${KUBE_BASE_IMAGE_REGISTRY}/go-runner:${go_runner_version}"
     "kube-scheduler,${KUBE_BASE_IMAGE_REGISTRY}/go-runner:${go_runner_version}"
-    "kube-proxy,${KUBE_BASE_IMAGE_REGISTRY}/debian-iptables-${arch}:${debian_iptables_version}"
+    "kube-proxy,${KUBE_BASE_IMAGE_REGISTRY}/debian-iptables:${debian_iptables_version}"
   )
 
   echo "${targets[@]}"
@@ -424,6 +422,7 @@ function kube::build::build_image() {
   chown -R "${USER_ID}":"${GROUP_ID}" "${LOCAL_OUTPUT_BUILD_CONTEXT}"
 
   cp /etc/localtime "${LOCAL_OUTPUT_BUILD_CONTEXT}/"
+  chmod u+w "${LOCAL_OUTPUT_BUILD_CONTEXT}/localtime"
 
   cp "${KUBE_ROOT}/build/build-image/Dockerfile" "${LOCAL_OUTPUT_BUILD_CONTEXT}/Dockerfile"
   cp "${KUBE_ROOT}/build/build-image/rsyncd.sh" "${LOCAL_OUTPUT_BUILD_CONTEXT}/"
@@ -575,10 +574,16 @@ function kube::build::run_build_command_ex() {
     --env "KUBE_BUILD_WITH_COVERAGE=${KUBE_BUILD_WITH_COVERAGE:-}"
     --env "KUBE_BUILD_PLATFORMS=${KUBE_BUILD_PLATFORMS:-}"
     --env "GOFLAGS=${GOFLAGS:-}"
-    --env "GOLDFLAGS=${GOLDFLAGS:-}"
     --env "GOGCFLAGS=${GOGCFLAGS:-}"
     --env "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-}"
   )
+
+  # use GOLDFLAGS only if it is set explicitly.
+  if [[ -v GOLDFLAGS ]]; then
+    docker_run_opts+=(
+      --env "GOLDFLAGS=${GOLDFLAGS:-}"
+    )
+  fi
 
   if [[ -n "${DOCKER_CGROUP_PARENT:-}" ]]; then
     kube::log::status "Using ${DOCKER_CGROUP_PARENT} as container cgroup parent"

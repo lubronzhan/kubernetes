@@ -295,6 +295,14 @@ func (in *KubeletConfiguration) DeepCopyInto(out *KubeletConfiguration) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	out.Logging = in.Logging
+	if in.EnableSystemLogHandler != nil {
+		in, out := &in.EnableSystemLogHandler, &out.EnableSystemLogHandler
+		*out = new(bool)
+		**out = **in
+	}
+	out.ShutdownGracePeriod = in.ShutdownGracePeriod
+	out.ShutdownGracePeriodCriticalPods = in.ShutdownGracePeriodCriticalPods
 	return
 }
 

@@ -44,6 +44,7 @@ import (
 	"k8s.io/kubernetes/pkg/controller/volume/common"
 	"k8s.io/kubernetes/pkg/controller/volume/persistentvolume/metrics"
 	pvutil "k8s.io/kubernetes/pkg/controller/volume/persistentvolume/util"
+	proxyutil "k8s.io/kubernetes/pkg/proxy/util"
 	"k8s.io/kubernetes/pkg/util/goroutinemap"
 	vol "k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/csimigration"
@@ -70,6 +71,7 @@ type ControllerParameters struct {
 	NodeInformer              coreinformers.NodeInformer
 	EventRecorder             record.EventRecorder
 	EnableDynamicProvisioning bool
+	FilteredDialOptions       *proxyutil.FilteredDialOptions
 }
 
 // NewController creates a new PersistentVolume controller
@@ -134,13 +136,15 @@ func NewController(p ControllerParameters) (*PersistentVolumeController, error) 
 
 	// This custom indexer will index pods by its PVC keys. Then we don't need
 	// to iterate all pods every time to find pods which reference given PVC.
-	if err := common.AddIndexerIfNotPresent(controller.podIndexer, common.PodPVCIndex, common.PodPVCIndexFunc); err != nil {
+	if err := common.AddPodPVCIndexerIfNotPresent(controller.podIndexer); err != nil {
 		return nil, fmt.Errorf("Could not initialize attach detach controller: %v", err)
 	}
 
 	csiTranslator := csitrans.New()
 	controller.translator = csiTranslator
 	controller.csiMigratedPluginManager = csimigration.NewPluginManager(csiTranslator)
+
+	controller.filteredDialOptions = p.FilteredDialOptions
 
 	return controller, nil
 }
@@ -313,7 +317,7 @@ func (ctrl *PersistentVolumeController) Run(stopCh <-chan struct{}) {
 	go wait.Until(ctrl.volumeWorker, time.Second, stopCh)
 	go wait.Until(ctrl.claimWorker, time.Second, stopCh)
 
-	metrics.Register(ctrl.volumes.store, ctrl.claims)
+	metrics.Register(ctrl.volumes.store, ctrl.claims, &ctrl.volumePluginMgr)
 
 	<-stopCh
 }

@@ -33,6 +33,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -126,46 +127,6 @@ var _ = SIGDescribe("Loadbalancing: L7", func() {
 				t.Execute()
 				ginkgo.By(t.ExitLog)
 				jig.WaitForIngress(true)
-			}
-		})
-
-		ginkgo.It("should create ingress with pre-shared certificate", func() {
-			executePresharedCertTest(f, jig, "")
-		})
-
-		ginkgo.It("should support multiple TLS certs", func() {
-			ginkgo.By("Creating an ingress with no certs.")
-			jig.CreateIngress(filepath.Join(e2eingress.IngressManifestPath, "multiple-certs"), ns, map[string]string{
-				e2eingress.IngressStaticIPKey: ns,
-			}, map[string]string{})
-
-			ginkgo.By("Adding multiple certs to the ingress.")
-			hosts := []string{"test1.ingress.com", "test2.ingress.com", "test3.ingress.com", "test4.ingress.com"}
-			secrets := []string{"tls-secret-1", "tls-secret-2", "tls-secret-3", "tls-secret-4"}
-			certs := [][]byte{}
-			for i, host := range hosts {
-				jig.AddHTTPS(secrets[i], host)
-				certs = append(certs, jig.GetRootCA(secrets[i]))
-			}
-			for i, host := range hosts {
-				err := jig.WaitForIngressWithCert(true, []string{host}, certs[i])
-				framework.ExpectNoError(err, fmt.Sprintf("Unexpected error while waiting for ingress: %v", err))
-			}
-
-			ginkgo.By("Remove all but one of the certs on the ingress.")
-			jig.RemoveHTTPS(secrets[1])
-			jig.RemoveHTTPS(secrets[2])
-			jig.RemoveHTTPS(secrets[3])
-
-			ginkgo.By("Test that the remaining cert is properly served.")
-			err := jig.WaitForIngressWithCert(true, []string{hosts[0]}, certs[0])
-			framework.ExpectNoError(err, fmt.Sprintf("Unexpected error while waiting for ingress: %v", err))
-
-			ginkgo.By("Add back one of the certs that was removed and check that all certs are served.")
-			jig.AddHTTPS(secrets[1], hosts[1])
-			for i, host := range hosts[:2] {
-				err := jig.WaitForIngressWithCert(true, []string{host}, certs[i])
-				framework.ExpectNoError(err, fmt.Sprintf("Unexpected error while waiting for ingress: %v", err))
 			}
 		})
 
@@ -622,10 +583,10 @@ var _ = SIGDescribe("Loadbalancing: L7", func() {
 			}
 			if jig.Ingress == nil {
 				ginkgo.By("No ingress created, no cleanup necessary")
-			} else {
-				ginkgo.By("Deleting ingress")
-				jig.TryDeleteIngress()
+				return
 			}
+			ginkgo.By("Deleting ingress")
+			jig.TryDeleteIngress()
 
 			ginkgo.By("Cleaning up cloud resources")
 			err := gceController.CleanupIngressController()
@@ -1141,21 +1102,52 @@ var _ = SIGDescribe("Ingress API", func() {
 		framework.ExpectNoError(err)
 		framework.ExpectEqual(updatedStatus.Status.LoadBalancer, statusToUpdate.Status.LoadBalancer, fmt.Sprintf("updated object expected to have updated loadbalancer status %#v, got %#v", statusToUpdate.Status.LoadBalancer, updatedStatus.Status.LoadBalancer))
 
+		ginkgo.By("get /status")
+		ingResource := schema.GroupVersionResource{Group: "networking.k8s.io", Version: ingVersion, Resource: "ingresses"}
+		gottenStatus, err := f.DynamicClient.Resource(ingResource).Namespace(ns).Get(context.TODO(), createdIngress.Name, metav1.GetOptions{}, "status")
+		framework.ExpectNoError(err)
+		statusUID, _, err := unstructured.NestedFieldCopy(gottenStatus.Object, "metadata", "uid")
+		framework.ExpectNoError(err)
+		framework.ExpectEqual(string(createdIngress.UID), statusUID, fmt.Sprintf("createdIngress.UID: %v expected to match statusUID: %v ", createdIngress.UID, statusUID))
+
 		// Ingress resource delete operations
 		ginkgo.By("deleting")
+
+		expectFinalizer := func(ing *networkingv1.Ingress, msg string) {
+			framework.ExpectNotEqual(ing.DeletionTimestamp, nil, fmt.Sprintf("expected deletionTimestamp, got nil on step: %q, ingress: %+v", msg, ing))
+			framework.ExpectEqual(len(ing.Finalizers) > 0, true, fmt.Sprintf("expected finalizers on ingress, got none on step: %q, ingress: %+v", msg, ing))
+		}
+
 		err = ingClient.Delete(context.TODO(), createdIngress.Name, metav1.DeleteOptions{})
 		framework.ExpectNoError(err)
-		_, err = ingClient.Get(context.TODO(), createdIngress.Name, metav1.GetOptions{})
-		framework.ExpectEqual(apierrors.IsNotFound(err), true, fmt.Sprintf("expected 404, got %#v", err))
+		ing, err := ingClient.Get(context.TODO(), createdIngress.Name, metav1.GetOptions{})
+		// If ingress controller does not support finalizers, we expect a 404.  Otherwise we validate finalizer behavior.
+		if err == nil {
+			expectFinalizer(ing, "deleting createdIngress")
+		} else {
+			framework.ExpectEqual(apierrors.IsNotFound(err), true, fmt.Sprintf("expected 404, got %v", err))
+		}
 		ings, err = ingClient.List(context.TODO(), metav1.ListOptions{LabelSelector: "special-label=" + f.UniqueName})
 		framework.ExpectNoError(err)
-		framework.ExpectEqual(len(ings.Items), 2, "filtered list should have 2 items")
+		// Should have <= 3 items since some ingresses might not have been deleted yet due to finalizers
+		framework.ExpectEqual(len(ings.Items) <= 3, true, "filtered list should have <= 3 items")
+		// Validate finalizer on the deleted ingress
+		for _, ing := range ings.Items {
+			if ing.Namespace == createdIngress.Namespace && ing.Name == createdIngress.Name {
+				expectFinalizer(&ing, "listing after deleting createdIngress")
+			}
+		}
 
 		ginkgo.By("deleting a collection")
 		err = ingClient.DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: "special-label=" + f.UniqueName})
 		framework.ExpectNoError(err)
 		ings, err = ingClient.List(context.TODO(), metav1.ListOptions{LabelSelector: "special-label=" + f.UniqueName})
 		framework.ExpectNoError(err)
-		framework.ExpectEqual(len(ings.Items), 0, "filtered list should have 0 items")
+		// Should have <= 3 items since some ingresses might not have been deleted yet due to finalizers
+		framework.ExpectEqual(len(ings.Items) <= 3, true, "filtered list should have <= 3 items")
+		// Validate finalizers
+		for _, ing := range ings.Items {
+			expectFinalizer(&ing, "deleting ingress collection")
+		}
 	})
 })

@@ -18,8 +18,8 @@ package testing
 
 import (
 	schedulerapi "k8s.io/kubernetes/pkg/scheduler/apis/config"
+	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
-	framework "k8s.io/kubernetes/pkg/scheduler/framework/v1alpha1"
 )
 
 // NewFramework creates a Framework from the register functions and options.
@@ -42,9 +42,29 @@ func RegisterQueueSortPlugin(pluginName string, pluginNewFunc runtime.PluginFact
 	return RegisterPluginAsExtensions(pluginName, pluginNewFunc, "QueueSort")
 }
 
+// RegisterPreFilterPlugin returns a function to register a PreFilter Plugin to a given registry.
+func RegisterPreFilterPlugin(pluginName string, pluginNewFunc runtime.PluginFactory) RegisterPluginFunc {
+	return RegisterPluginAsExtensions(pluginName, pluginNewFunc, "PreFilter")
+}
+
 // RegisterFilterPlugin returns a function to register a Filter Plugin to a given registry.
 func RegisterFilterPlugin(pluginName string, pluginNewFunc runtime.PluginFactory) RegisterPluginFunc {
 	return RegisterPluginAsExtensions(pluginName, pluginNewFunc, "Filter")
+}
+
+// RegisterReservePlugin returns a function to register a Reserve Plugin to a given registry.
+func RegisterReservePlugin(pluginName string, pluginNewFunc runtime.PluginFactory) RegisterPluginFunc {
+	return RegisterPluginAsExtensions(pluginName, pluginNewFunc, "Reserve")
+}
+
+// RegisterPermitPlugin returns a function to register a Permit Plugin to a given registry.
+func RegisterPermitPlugin(pluginName string, pluginNewFunc runtime.PluginFactory) RegisterPluginFunc {
+	return RegisterPluginAsExtensions(pluginName, pluginNewFunc, "Permit")
+}
+
+// RegisterPreBindPlugin returns a function to register a PreBind Plugin to a given registry.
+func RegisterPreBindPlugin(pluginName string, pluginNewFunc runtime.PluginFactory) RegisterPluginFunc {
+	return RegisterPluginAsExtensions(pluginName, pluginNewFunc, "PreBind")
 }
 
 // RegisterScorePlugin returns a function to register a Score Plugin to a given registry.
@@ -100,8 +120,6 @@ func getPluginSetByExtension(plugins *schedulerapi.Plugins, extension string) *s
 		return initializeIfNeeded(&plugins.Bind)
 	case "Reserve":
 		return initializeIfNeeded(&plugins.Reserve)
-	case "Unreserve":
-		return initializeIfNeeded(&plugins.Unreserve)
 	case "Permit":
 		return initializeIfNeeded(&plugins.Permit)
 	case "PreBind":
